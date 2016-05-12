@@ -1,10 +1,11 @@
-// osmupdate 2015-04-15 10:00
-#define VERSION "0.4.1"
+// osmupdate 2016-05-12 02:00
+#define VERSION "0.4.2"
 //
 // compile this file:
 // gcc osmupdate.c -o osmupdate
 //
-// (c) 2011..2015 Markus Weber, Nuernberg
+// (c) 2011..2016 Markus Weber, Nuernberg
+// Tobias Wendorff contributed --force-output and --keep-downloads
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Affero General Public License
@@ -87,6 +88,12 @@ const char* helptext=
 "\n"
 "The program osmupdate recognizes a few command line options:\n"
 "\n"
+"--force-output\n"
+"        By default, osmconvert will exit with code 21, if the input\n"
+"        is up to date already and no output-file will be written.\n"
+"        This option forces to copy the input file to the given output\n"
+"        filename. WARNING: Right now, this doesn't do format conversion!\n"
+"\n"
 "--max-days=UPDATE_RANGE\n"
 "        By default, the maximum time range for to assemble a\n"
 "        cumulated changefile is 250 days. You can change this by\n"
@@ -130,6 +137,11 @@ const char* helptext=
 "        Do not invoke this option if you are going to use different\n"
 "        change file sources (option --base-url). This would cause\n"
 "        severe data corruption.\n"
+"\n"
+"--keep-downloads\n"
+"        This option is similar to --keep-tempfiles, but this option\n"
+"        keeps downloaded files only. Temporarily created files, f.e.\n"
+"        the ones been created in the merging process, will be deleted.\n"
 "\n"
 "--compression-level=LEVEL\n"
 "        Define level for gzip compression. Values between 1 (low\n"
@@ -194,12 +206,14 @@ static int loglevel= 0;  // logging to stderr;
   #define DIRSEP '\\'
   #define DIRSEPS "\\"
   #define DELFILE "del"
+  #define COPYFILE "copy /Y"
   #define off_t off64_t
   #define lseek lseek64
 #else
   #define NL "\n"  // use LF as new-line sequence
   #define DIRSEP '/'
   #define DIRSEPS "/"
+  #define COPYFILE "cp --force --verbose"
   #define DELFILE "rm"
   #define O_BINARY 0
 #endif
@@ -496,6 +510,10 @@ static const char* global_osmconvert_program=
   // path to osmconvert program
 static char global_tempfile_name[450]= "";
   // prefix of names for temporary files
+static bool global_copy_always= false;
+  // write a file even if there wasn't an update
+static bool global_keep_downloads= false;
+  // downloaded files shall not be deleted at program end
 static bool global_keep_tempfiles= false;
   // temporary files shall not be deleted at program end
 static char global_osmconvert_arguments[2000]= "";
@@ -1151,9 +1169,19 @@ return 0;
         sizeof(global_tempfile_name)-50);
   continue;  // take next parameter
       }
+    if(strzcmp(a,"--force-output")==0) {
+        // temporary files shall not be deleted at program end
+      global_copy_always= true;
+  continue;  // take next parameter
+      }
     if(strzcmp(a,"--keep-tempfiles")==0) {
         // temporary files shall not be deleted at program end
       global_keep_tempfiles= true;
+  continue;  // take next parameter
+      }
+    if(strzcmp(a,"--keep-downloads")==0) {
+        // downloaded files shall not be deleted at program end
+      global_keep_downloads= true;
   continue;  // take next parameter
       }
     if(strzcmp(a,"--compression-level=")==0) {
@@ -1520,10 +1548,24 @@ return 1;
     strcpy(stpmcpy(master_cachefile_name,global_tempfile_name,
       sizeof(master_cachefile_name)-5),".8");
     if(!file_exists(master_cachefile_name)) {
-      if(old_file==NULL)
+      if(old_file==NULL) {
         PINFO("There is no changefile since this timestamp.")
-      else 
+      } else {
         PINFO("Your OSM file is already up-to-date.")
+        if(global_copy_always) {
+            if(loglevel>0)
+                PINFO("Copying old file to new file.")
+            
+            command_p= command;
+            stecpy(&command_p,command_e," ");
+            stecpy(&command_p,command_e,COPYFILE" \""); // using system command
+            steesccpy(&command_p,command_e,old_file);   // use old filename
+            stecpy(&command_p,command_e,"\" \"");
+            steesccpy(&command_p,command_e,new_file);   // write it to new name
+            stecpy(&command_p,command_e,"\"");
+            shell_command(command,result);
+        }
+      }
 return 21;
       }
     command_p= command;
@@ -1629,22 +1671,44 @@ return 21;
       PINFO("Keeping temporary files.")
     }  // tempfiles shall be kept
   else {  // tempfiles shall be deleted
+    
     char command[500],*command_p,result[1000];
     char* command_e= command+sizeof(command);
-
+    static char master_cachefile_name[400];
+    static char master_cachefile_name_temp[400];
+    
     if(loglevel>0)
-      PINFO("Deleting temporary files.")
-    command_p= command;
-    stecpy(&command_p,command_e,DELFILE" \"");
-    steesccpy(&command_p,command_e,global_tempfile_name);
-    stecpy(&command_p,command_e,"\".*");
-    shell_command(command,result);
-    rmdir(tempfile_directory);
-    }  // tempfiles shall be deleted
+        PINFO("Deleting temporary files.")
+    
+    if(global_keep_downloads) { // downloaded updates shall be kept
+        
+        if(loglevel>0)
+            PINFO("Keeping downloaded files.")
+
+        strcpy(stpmcpy(master_cachefile_name,global_tempfile_name,
+        sizeof(master_cachefile_name)-5),".8");
+        if(file_exists(master_cachefile_name)) {
+            unlink(master_cachefile_name);
+        }
+        
+        strcpy(stpmcpy(master_cachefile_name_temp,global_tempfile_name,
+        sizeof(master_cachefile_name_temp)-5),".9");
+        if(file_exists(master_cachefile_name_temp)) {
+            unlink(master_cachefile_name_temp);
+        }
+    
+    } else { // downloaded and temporary files shall be deleted
+        command_p= command;
+        stecpy(&command_p,command_e,DELFILE" \"");
+        steesccpy(&command_p,command_e,global_tempfile_name);
+        stecpy(&command_p,command_e,"\".*"); // remove all files
+        shell_command(command,result);
+    }
+    rmdir(tempfile_directory); // removes directory when empty
+  }  
 
   if(main_return_value==0 && loglevel>0)
     PINFO("Completed successfully.")
 
   return main_return_value;
   }  // end   main()
-
