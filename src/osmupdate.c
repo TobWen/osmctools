@@ -1,11 +1,15 @@
 // osmupdate 2016-05-12 02:00
 #define VERSION "0.4.2"
 //
-// compile this file:
+// compile this file with GCC:
 // gcc osmupdate.c -o osmupdate
 //
+// compile this file with MinGW's GCC (needs libz-mingw-w64-dev):
+// 32-bit: i686-w64-mingw32-gcc   -s osmupdate.c -o osmupdate_32
+// 64-bit: x86_64-w64-mingw32-gcc -s osmupdate.c -o osmupdate_64
+//
 // (c) 2011..2016 Markus Weber, Nuernberg
-// Tobias Wendorff contributed --force-output and --keep-downloads
+// Tobias Wendorff contributed download-only, force-output, keep-downloads
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Affero General Public License
@@ -158,6 +162,11 @@ const char* helptext=
 "        \"-replicate\" because it was custom to have this word in the\n"
 "        URL, right after the period identifier \"day\" etc.\n"
 "\n"
+"--download-only\n"
+"        This function downloads changefiles from the server only.\n"
+"        It neither does any merging, nor writes any output files.\n"
+"        You can use it with any input file containing a timestamp\n"
+"        or with a timestamp in the format as described above.\n"
 "-v\n"
 "--verbose\n"
 "        With activated \'verbose\' mode, some statistical data and\n"
@@ -510,8 +519,10 @@ static const char* global_osmconvert_program=
   // path to osmconvert program
 static char global_tempfile_name[450]= "";
   // prefix of names for temporary files
+static bool global_download_only= false;
+  // download changefiles to temporary folder only
 static bool global_copy_always= false;
-  // write a file even if there wasn't an update
+  // if there's no update, copy old file to new one
 static bool global_keep_downloads= false;
   // downloaded files shall not be deleted at program end
 static bool global_keep_tempfiles= false;
@@ -989,6 +1000,9 @@ exit(1);
       }  // verbose mode
     number_of_changefiles_in_cache++;
     }  // changefile download requested
+ 
+  if(global_download_only)
+return; // quit function, since user wants to download only
 
   if(number_of_changefiles_in_cache>=global_max_merge
       || (file_sequence_number==0 && number_of_changefiles_in_cache>0)) {
@@ -1169,8 +1183,13 @@ return 0;
         sizeof(global_tempfile_name)-50);
   continue;  // take next parameter
       }
+    if(strzcmp(a,"--download-only")==0) {
+        // download changefiles to temporary folder only
+      global_download_only= true;
+  continue;  // take next parameter
+      }
     if(strzcmp(a,"--force-output")==0) {
-        // temporary files shall not be deleted at program end
+        // if there's no update, copy old file to new one
       global_copy_always= true;
   continue;  // take next parameter
       }
@@ -1368,6 +1387,7 @@ return 1;
       }
     }  // end   no timestamp given by the user
 
+if(!global_download_only) {
   // parameter consistency check
   if(new_file==NULL) {
     PERR("No output file was specified.");
@@ -1379,9 +1399,10 @@ return 1;
     }
   if(old_file==NULL && !new_file_is_changefile) {
     PERR("If no old OSM file is specified, osmupdate can only "
-      "generate a changefile.");
+      "download or generate changefiles.");
 return 1;
     }
+}
 
   // initialize sequence numbers and timestamps
   minutely_sequence_number= hourly_sequence_number=
@@ -1537,6 +1558,12 @@ return 1;
   // process remaining files which may still wait in the cache;
   process_changefile(0,0,0);
 
+  if(loglevel>0)
+      PINFO("Download of files complete.")
+  
+  if(global_download_only)
+return 0; // quit processing here, since user wants to download only
+  
   /* create requested output file */ {
     char master_cachefile_name[400];
     char command[2000],*command_p;
@@ -1552,7 +1579,7 @@ return 1;
         PINFO("There is no changefile since this timestamp.")
       } else {
         PINFO("Your OSM file is already up-to-date.")
-        if(global_copy_always) {
+        if(global_copy_always && !global_download_only) {
             if(loglevel>0)
                 PINFO("Copying old file to new file.")
             
@@ -1568,6 +1595,7 @@ return 1;
       }
 return 21;
       }
+if(!global_download_only)
     command_p= command;
     if(new_file_is_changefile) {  // changefile
       if(new_file_is_gz) {  // compressed
